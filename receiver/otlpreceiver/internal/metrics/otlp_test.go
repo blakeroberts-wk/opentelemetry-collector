@@ -96,7 +96,8 @@ func otlpReceiverOnGRPCServer(t *testing.T, mc consumer.Metrics) net.Addr {
 		ReceiverCreateSettings: set,
 	})
 	require.NoError(t, err)
-	r := New(mc, obsrecv)
+	r, err := New(mc, set, obsrecv)
+	require.NoError(t, err)
 	// Now run it as a gRPC server
 	srv := grpc.NewServer()
 	pmetricotlp.RegisterGRPCServer(srv, r)

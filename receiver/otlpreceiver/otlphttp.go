@@ -15,13 +15,16 @@
 package otlpreceiver // import "go.opentelemetry.io/collector/receiver/otlpreceiver"
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	rerrors "go.opentelemetry.io/collector/receiver/otlpreceiver/internal/errors"
 	"go.opentelemetry.io/collector/receiver/otlpreceiver/internal/logs"
 	"go.opentelemetry.io/collector/receiver/otlpreceiver/internal/metrics"
 	"go.opentelemetry.io/collector/receiver/otlpreceiver/internal/trace"
@@ -125,6 +128,11 @@ func readAndCloseBody(resp http.ResponseWriter, req *http.Request, encoder encod
 
 // writeError encodes the HTTP error inside a rpc.Status message as required by the OTLP protocol.
 func writeError(w http.ResponseWriter, encoder encoder, err error, statusCode int) {
+	errRateLimited := &rerrors.ErrorRateLimited{}
+	if errors.As(err, &errRateLimited) {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(errRateLimited.Backoff)/1e9, 10))
+		statusCode = http.StatusTooManyRequests
+	}
 	s, ok := status.FromError(err)
 	if !ok {
 		s = errorMsgToStatus(err.Error(), statusCode)
@@ -166,8 +174,12 @@ func writeResponse(w http.ResponseWriter, contentType string, statusCode int, ms
 }
 
 func errorMsgToStatus(errMsg string, statusCode int) *status.Status {
-	if statusCode == http.StatusBadRequest {
+	switch statusCode {
+	case http.StatusBadRequest:
 		return status.New(codes.InvalidArgument, errMsg)
+	case http.StatusTooManyRequests:
+		return status.New(codes.Unavailable, errMsg)
+	default:
+		return status.New(codes.Unknown, errMsg)
 	}
-	return status.New(codes.Unknown, errMsg)
 }
