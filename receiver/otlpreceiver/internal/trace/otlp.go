@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package trace // import "go.opentelemetry.io/collector/receiver/otlpreceiver/internal/trace"
 
@@ -19,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,7 +33,7 @@ type Receiver struct {
 	nextConsumer consumer.Traces
 	obsrecv      *obsreport.Receiver
 
-	requestDurationHistogram instrument.Int64Histogram
+	requestDurationHistogram metric.Int64Histogram
 }
 
 // New creates a new Receiver reference.
@@ -57,7 +46,7 @@ func New(nextConsumer consumer.Traces, set receiver.CreateSettings, obsrecv *obs
 	var err error
 	r.requestDurationHistogram, err = set.MeterProvider.Meter(scopeName).Int64Histogram(
 		"rpc.server.duration",
-		instrument.WithUnit("ms"))
+		metric.WithUnit("ms"))
 
 	return r, err
 }
@@ -93,8 +82,11 @@ func (r *Receiver) recordRequestDuration(ctx context.Context, t0 time.Time, err 
 		}
 	}
 	r.requestDurationHistogram.Record(ctx, duration,
-		semconv.RPCServiceKey.String("trace"),
-		semconv.RPCMethodKey.String("export"),
-		semconv.RPCSystemGRPC,
-		semconv.RPCGRPCStatusCodeKey.Int(int(s.Code())))
+		metric.WithAttributes(
+			semconv.RPCServiceKey.String("trace"),
+			semconv.RPCMethodKey.String("export"),
+			semconv.RPCSystemGRPC,
+			semconv.RPCGRPCStatusCodeKey.Int(int(s.Code())),
+		),
+	)
 }

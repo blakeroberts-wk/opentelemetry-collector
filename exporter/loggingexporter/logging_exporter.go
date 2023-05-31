@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package loggingexporter // import "go.opentelemetry.io/collector/exporter/loggingexporter"
 
@@ -37,7 +26,9 @@ type loggingExporter struct {
 }
 
 func (s *loggingExporter) pushTraces(_ context.Context, td ptrace.Traces) error {
-	s.logger.Info("TracesExporter", zap.Int("#spans", td.SpanCount()))
+	s.logger.Info("TracesExporter",
+		zap.Int("resource spans", td.ResourceSpans().Len()),
+		zap.Int("spans", td.SpanCount()))
 	if s.verbosity != configtelemetry.LevelDetailed {
 		return nil
 	}
@@ -51,7 +42,10 @@ func (s *loggingExporter) pushTraces(_ context.Context, td ptrace.Traces) error 
 }
 
 func (s *loggingExporter) pushMetrics(_ context.Context, md pmetric.Metrics) error {
-	s.logger.Info("MetricsExporter", zap.Int("#metrics", md.MetricCount()))
+	s.logger.Info("MetricsExporter",
+		zap.Int("resource metrics", md.ResourceMetrics().Len()),
+		zap.Int("metrics", md.MetricCount()),
+		zap.Int("data points", md.DataPointCount()))
 	if s.verbosity != configtelemetry.LevelDetailed {
 		return nil
 	}
@@ -65,7 +59,9 @@ func (s *loggingExporter) pushMetrics(_ context.Context, md pmetric.Metrics) err
 }
 
 func (s *loggingExporter) pushLogs(_ context.Context, ld plog.Logs) error {
-	s.logger.Info("LogsExporter", zap.Int("#logs", ld.LogRecordCount()))
+	s.logger.Info("LogsExporter",
+		zap.Int("resource logs", ld.ResourceLogs().Len()),
+		zap.Int("log records", ld.LogRecordCount()))
 	if s.verbosity != configtelemetry.LevelDetailed {
 		return nil
 	}

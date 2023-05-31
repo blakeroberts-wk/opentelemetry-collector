@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package configtls // import "go.opentelemetry.io/collector/config/configtls"
 
@@ -97,6 +86,10 @@ type TLSServerSetting struct {
 	// This sets the ClientCAs and ClientAuth to RequireAndVerifyClientCert in the TLSConfig. Please refer to
 	// https://godoc.org/crypto/tls#Config for more information. (optional)
 	ClientCAFile string `mapstructure:"client_ca_file"`
+
+	// Reload the ClientCAs file when it is modified
+	// (optional, default false)
+	ReloadClientCAFile bool `mapstructure:"client_ca_file_reload"`
 }
 
 // certReloader is a wrapper object for certificate reloading
@@ -236,14 +229,25 @@ func (c TLSServerSetting) LoadTLSConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to load TLS config: %w", err)
 	}
 	if c.ClientCAFile != "" {
-		certPool, err := c.loadCert(c.ClientCAFile)
+		reloader, err := newClientCAsReloader(c.ClientCAFile, &c)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load TLS config: failed to load client CA CertPool: %w", err)
+			return nil, err
 		}
-		tlsCfg.ClientCAs = certPool
+		if c.ReloadClientCAFile {
+			err = reloader.startWatching()
+			if err != nil {
+				return nil, err
+			}
+			tlsCfg.GetConfigForClient = func(t *tls.ClientHelloInfo) (*tls.Config, error) { return reloader.getClientConfig(tlsCfg) }
+		}
+		tlsCfg.ClientCAs = reloader.certPool
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return tlsCfg, nil
+}
+
+func (c TLSServerSetting) loadClientCAFile() (*x509.CertPool, error) {
+	return c.loadCert(c.ClientCAFile)
 }
 
 func convertVersion(v string, defaultVersion uint16) (uint16, error) {

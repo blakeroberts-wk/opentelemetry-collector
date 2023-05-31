@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 // Package fanoutconsumer contains implementations of Traces/Metrics/Logs consumers
 // that fan out the data to multiple other consumers.
@@ -18,9 +7,12 @@ package fanoutconsumer // import "go.opentelemetry.io/collector/service/internal
 
 import (
 	"context"
+	"fmt"
 
 	"go.uber.org/multierr"
 
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/connector"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/plog"
 )
@@ -79,4 +71,51 @@ func (lsc *logsConsumer) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 		errs = multierr.Append(errs, lc.ConsumeLogs(ctx, ld))
 	}
 	return errs
+}
+
+var _ connector.LogsRouter = (*logsRouter)(nil)
+
+type logsRouter struct {
+	consumer.Logs
+	consumers map[component.ID]consumer.Logs
+}
+
+func NewLogsRouter(cm map[component.ID]consumer.Logs) consumer.Logs {
+	consumers := make([]consumer.Logs, 0, len(cm))
+	for _, consumer := range cm {
+		consumers = append(consumers, consumer)
+	}
+	return &logsRouter{
+		Logs:      NewLogs(consumers),
+		consumers: cm,
+	}
+}
+
+func (r *logsRouter) PipelineIDs() []component.ID {
+	ids := make([]component.ID, 0, len(r.consumers))
+	for id := range r.consumers {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (r *logsRouter) Consumer(pipelineIDs ...component.ID) (consumer.Logs, error) {
+	if len(pipelineIDs) == 0 {
+		return nil, fmt.Errorf("missing consumers")
+	}
+	consumers := make([]consumer.Logs, 0, len(pipelineIDs))
+	var errors error
+	for _, pipelineID := range pipelineIDs {
+		c, ok := r.consumers[pipelineID]
+		if ok {
+			consumers = append(consumers, c)
+		} else {
+			errors = multierr.Append(errors, fmt.Errorf("missing consumer: %q", pipelineID))
+		}
+	}
+	if errors != nil {
+		// TODO potentially this could return a NewLogs with the valid consumers
+		return nil, errors
+	}
+	return NewLogs(consumers), nil
 }

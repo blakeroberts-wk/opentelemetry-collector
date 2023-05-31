@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package service // import "go.opentelemetry.io/collector/service"
 
@@ -19,7 +8,10 @@ import (
 	"fmt"
 	"runtime"
 
-	"go.opentelemetry.io/otel/metric"
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 
@@ -28,20 +20,16 @@ import (
 	"go.opentelemetry.io/collector/connector"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/extension"
-	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/internal/obsreportconfig"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/receiver"
+	semconv "go.opentelemetry.io/collector/semconv/v1.18.0"
 	"go.opentelemetry.io/collector/service/extensions"
+	"go.opentelemetry.io/collector/service/internal/graph"
 	"go.opentelemetry.io/collector/service/internal/proctelemetry"
 	"go.opentelemetry.io/collector/service/telemetry"
 )
-
-var graphFeatureGate = featuregate.GlobalRegistry().MustRegister(
-	"service.graph",
-	featuregate.StageBeta,
-	featuregate.WithRegisterDescription("Enables the new graph based implementations for pipelines."),
-	featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector/issues/2336"))
 
 // Settings holds configuration for building a new service.
 type Settings struct {
@@ -70,8 +58,7 @@ type Settings struct {
 	LoggingOptions []zap.Option
 
 	// For testing purpose only.
-	useOtel  *bool
-	useGraph *bool
+	useOtel *bool
 }
 
 // Service represents the implementation of a component.Host.
@@ -88,10 +75,8 @@ func New(ctx context.Context, set Settings, cfg Config) (*Service, error) {
 	if set.useOtel != nil {
 		useOtel = *set.useOtel
 	}
-	useGraph := graphFeatureGate.IsEnabled()
-	if set.useGraph != nil {
-		useGraph = *set.useGraph
-	}
+	disableHighCard := obsreportconfig.DisableHighCardinalityMetricsfeatureGate.IsEnabled()
+	extendedConfig := obsreportconfig.UseOtelWithSDKConfigurationForInternalTelemetryFeatureGate.IsEnabled()
 	srv := &Service{
 		buildInfo: set.BuildInfo,
 		host: &serviceHost{
@@ -103,27 +88,33 @@ func New(ctx context.Context, set Settings, cfg Config) (*Service, error) {
 			buildInfo:         set.BuildInfo,
 			asyncErrorChannel: set.AsyncErrorChannel,
 		},
-		telemetryInitializer: newColTelemetry(useOtel),
+		telemetryInitializer: newColTelemetry(useOtel, disableHighCard, extendedConfig),
 	}
 	var err error
 	srv.telemetry, err = telemetry.New(ctx, telemetry.Settings{ZapOptions: set.LoggingOptions}, cfg.Telemetry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get logger: %w", err)
 	}
+	res := buildResource(set.BuildInfo, cfg.Telemetry)
+	pcommonRes := pdataFromSdk(res)
+
 	srv.telemetrySettings = component.TelemetrySettings{
 		Logger:         srv.telemetry.Logger(),
 		TracerProvider: srv.telemetry.TracerProvider(),
-		MeterProvider:  metric.NewNoopMeterProvider(),
+		MeterProvider:  noop.NewMeterProvider(),
 		MetricsLevel:   cfg.Telemetry.Metrics.Level,
+
+		// Construct telemetry attributes from build info and config's resource attributes.
+		Resource: pcommonRes,
 	}
 
-	if err = srv.telemetryInitializer.init(set.BuildInfo, srv.telemetrySettings.Logger, cfg.Telemetry, set.AsyncErrorChannel); err != nil {
+	if err = srv.telemetryInitializer.init(res, srv.telemetrySettings, cfg.Telemetry, set.AsyncErrorChannel); err != nil {
 		return nil, fmt.Errorf("failed to initialize telemetry: %w", err)
 	}
 	srv.telemetrySettings.MeterProvider = srv.telemetryInitializer.mp
 
 	// process the configuration and initialize the pipeline
-	if err = srv.initExtensionsAndPipeline(ctx, set, cfg, useGraph); err != nil {
+	if err = srv.initExtensionsAndPipeline(ctx, set, cfg); err != nil {
 		// If pipeline initialization fails then shut down the telemetry server
 		if shutdownErr := srv.telemetryInitializer.shutdown(); shutdownErr != nil {
 			err = multierr.Append(err, fmt.Errorf("failed to shutdown collector telemetry: %w", shutdownErr))
@@ -189,7 +180,7 @@ func (srv *Service) Shutdown(ctx context.Context) error {
 	return errs
 }
 
-func (srv *Service) initExtensionsAndPipeline(ctx context.Context, set Settings, cfg Config, useGraph bool) error {
+func (srv *Service) initExtensionsAndPipeline(ctx context.Context, set Settings, cfg Config) error {
 	var err error
 	extensionsSettings := extensions.Settings{
 		Telemetry:  srv.telemetrySettings,
@@ -200,24 +191,27 @@ func (srv *Service) initExtensionsAndPipeline(ctx context.Context, set Settings,
 		return fmt.Errorf("failed to build extensions: %w", err)
 	}
 
-	pSet := pipelinesSettings{
+	graphPipelinesConfigs := make(map[component.ID]*graph.PipelineConfig, len(cfg.Pipelines))
+	for id, cfg := range cfg.Pipelines {
+		graphPipelinesConfigs[id] = &graph.PipelineConfig{
+			Receivers:  cfg.Receivers,
+			Processors: cfg.Processors,
+			Exporters:  cfg.Exporters,
+		}
+	}
+
+	pSet := graph.Settings{
 		Telemetry:        srv.telemetrySettings,
 		BuildInfo:        srv.buildInfo,
 		ReceiverBuilder:  set.Receivers,
 		ProcessorBuilder: set.Processors,
 		ExporterBuilder:  set.Exporters,
 		ConnectorBuilder: set.Connectors,
-		PipelineConfigs:  cfg.Pipelines,
+		PipelineConfigs:  graphPipelinesConfigs,
 	}
 
-	if useGraph {
-		if srv.host.pipelines, err = buildPipelinesGraph(ctx, pSet); err != nil {
-			return fmt.Errorf("failed to build pipelines: %w", err)
-		}
-	} else {
-		if srv.host.pipelines, err = buildPipelines(ctx, pSet); err != nil {
-			return fmt.Errorf("failed to build pipelines: %w", err)
-		}
+	if srv.host.pipelines, err = graph.Build(ctx, pSet); err != nil {
+		return fmt.Errorf("failed to build pipelines: %w", err)
 	}
 
 	if cfg.Telemetry.Metrics.Level != configtelemetry.LevelNone && cfg.Telemetry.Metrics.Address != "" {
@@ -243,4 +237,45 @@ func getBallastSize(host component.Host) uint64 {
 		}
 	}
 	return 0
+}
+
+func buildResource(buildInfo component.BuildInfo, cfg telemetry.Config) *resource.Resource {
+	var telAttrs []attribute.KeyValue
+
+	for k, v := range cfg.Resource {
+		// nil value indicates that the attribute should not be included in the telemetry.
+		if v != nil {
+			telAttrs = append(telAttrs, attribute.String(k, *v))
+		}
+	}
+
+	if _, ok := cfg.Resource[semconv.AttributeServiceName]; !ok {
+		// AttributeServiceName is not specified in the config. Use the default service name.
+		telAttrs = append(telAttrs, attribute.String(semconv.AttributeServiceName, buildInfo.Command))
+	}
+
+	if _, ok := cfg.Resource[semconv.AttributeServiceInstanceID]; !ok {
+		// AttributeServiceInstanceID is not specified in the config. Auto-generate one.
+		instanceUUID, _ := uuid.NewRandom()
+		instanceID := instanceUUID.String()
+		telAttrs = append(telAttrs, attribute.String(semconv.AttributeServiceInstanceID, instanceID))
+	}
+
+	if _, ok := cfg.Resource[semconv.AttributeServiceVersion]; !ok {
+		// AttributeServiceVersion is not specified in the config. Use the actual
+		// build version.
+		telAttrs = append(telAttrs, attribute.String(semconv.AttributeServiceVersion, buildInfo.Version))
+	}
+	return resource.NewWithAttributes(semconv.SchemaURL, telAttrs...)
+}
+
+func pdataFromSdk(res *resource.Resource) pcommon.Resource {
+	// pcommon.NewResource is the best way to generate a new resource currently and is safe to use outside of tests.
+	// Because the resource is signal agnostic, and we need a net new resource, not an existing one, this is the only
+	// method of creating it without exposing internal packages.
+	pcommonRes := pcommon.NewResource()
+	for _, keyValue := range res.Attributes() {
+		pcommonRes.Attributes().PutStr(string(keyValue.Key), keyValue.Value.AsString())
+	}
+	return pcommonRes
 }

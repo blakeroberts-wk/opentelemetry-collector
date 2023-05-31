@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package otlpreceiver // import "go.opentelemetry.io/collector/receiver/otlpreceiver"
 
@@ -27,7 +16,7 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
@@ -50,8 +39,6 @@ import (
 )
 
 const (
-	useOtelForInternalMetricsfeatureGateID = "telemetry.useOtelForInternalMetrics"
-
 	scopeName = "github.com/open-telemetry/open-telemetry-collector-contrib/receiver/otlpreceiver"
 )
 
@@ -72,8 +59,8 @@ type otlpReceiver struct {
 
 	useOtelMetrics bool
 
-	rpcRequestDurationHistogram  instrument.Int64Histogram
-	httpRequestDurationHistogram instrument.Int64Histogram
+	rpcRequestDurationHistogram  metric.Int64Histogram
+	httpRequestDurationHistogram metric.Int64Histogram
 
 	settings receiver.CreateSettings
 }
@@ -136,12 +123,12 @@ func (r *otlpReceiver) createOtelMetrics(set receiver.CreateSettings) error {
 	var errors, err error
 	r.rpcRequestDurationHistogram, err = set.MeterProvider.Meter(scopeName).Int64Histogram(
 		"rpc.server.duration",
-		instrument.WithUnit("ms"))
+		metric.WithUnit("ms"))
 	errors = multierr.Append(errors, err)
 
 	r.httpRequestDurationHistogram, err = set.MeterProvider.Meter(scopeName).Int64Histogram(
 		"http.server.duration",
-		instrument.WithUnit("ms"))
+		metric.WithUnit("ms"))
 	errors = multierr.Append(errors, err)
 
 	return errors
@@ -272,7 +259,7 @@ func (r *otlpReceiver) registerTraceConsumer(tc consumer.Traces) error {
 				handleUnmatchedMethod(resp)
 				return
 			}
-			switch req.Header.Get("Content-Type") {
+			switch getMimeTypeFromContentType(req.Header.Get("Content-Type")) {
 			case pbContentType:
 				handleTraces(resp, req, httpTracesReceiver, pbEncoder)
 			case jsonContentType:
@@ -307,7 +294,7 @@ func (r *otlpReceiver) registerMetricsConsumer(mc consumer.Metrics) error {
 				handleUnmatchedMethod(resp)
 				return
 			}
-			switch req.Header.Get("Content-Type") {
+			switch getMimeTypeFromContentType(req.Header.Get("Content-Type")) {
 			case pbContentType:
 				handleMetrics(resp, req, httpMetricsReceiver, pbEncoder)
 			case jsonContentType:
@@ -343,7 +330,7 @@ func (r *otlpReceiver) registerLogsConsumer(lc consumer.Logs) error {
 				handleUnmatchedMethod(resp)
 				return
 			}
-			switch req.Header.Get("Content-Type") {
+			switch getMimeTypeFromContentType(req.Header.Get("Content-Type")) {
 			case pbContentType:
 				handleLogs(resp, req, httpLogsReceiver, pbEncoder)
 			case jsonContentType:
@@ -367,11 +354,14 @@ func (r *otlpReceiver) recordRequestDuration(resp http.ResponseWriter, req *http
 	}
 	if r.useOtelMetrics {
 		r.httpRequestDurationHistogram.Record(req.Context(), duration,
-			semconv.HTTPMethodKey.String(req.Method),
-			semconv.HTTPSchemeKey.String(req.URL.Scheme),
-			semconv.HTTPRouteKey.String(route),
-			semconv.HTTPStatusCodeKey.Int(resp.(*statusRecorder).status),
-			attribute.String(formatKey, format))
+			metric.WithAttributes(
+				semconv.HTTPMethodKey.String(req.Method),
+				semconv.HTTPSchemeKey.String(req.URL.Scheme),
+				semconv.HTTPRouteKey.String(route),
+				semconv.HTTPStatusCodeKey.Int(resp.(*statusRecorder).status),
+				attribute.String(formatKey, format),
+			),
+		)
 		return
 	}
 	stats.RecordWithTags(req.Context(), []tag.Mutator{

@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package forwardconnector // import "go.opentelemetry.io/collector/connector/forwardconnector"
 
@@ -31,9 +20,9 @@ func NewFactory() connector.Factory {
 	return connector.NewFactory(
 		typeStr,
 		createDefaultConfig,
-		connector.WithTracesToTraces(createTracesToTraces, component.StabilityLevelDevelopment),
-		connector.WithMetricsToMetrics(createMetricsToMetrics, component.StabilityLevelDevelopment),
-		connector.WithLogsToLogs(createLogsToLogs, component.StabilityLevelDevelopment),
+		connector.WithTracesToTraces(createTracesToTraces, component.StabilityLevelBeta),
+		connector.WithMetricsToMetrics(createMetricsToMetrics, component.StabilityLevelBeta),
+		connector.WithLogsToLogs(createLogsToLogs, component.StabilityLevelBeta),
 	)
 }
 
@@ -45,8 +34,8 @@ func createDefaultConfig() component.Config {
 // createTracesToTraces creates a trace receiver based on provided config.
 func createTracesToTraces(
 	_ context.Context,
-	set connector.CreateSettings,
-	cfg component.Config,
+	_ connector.CreateSettings,
+	_ component.Config,
 	nextConsumer consumer.Traces,
 ) (connector.Traces, error) {
 	return &forward{Traces: nextConsumer}, nil
@@ -55,8 +44,8 @@ func createTracesToTraces(
 // createMetricsToMetrics creates a metrics receiver based on provided config.
 func createMetricsToMetrics(
 	_ context.Context,
-	set connector.CreateSettings,
-	cfg component.Config,
+	_ connector.CreateSettings,
+	_ component.Config,
 	nextConsumer consumer.Metrics,
 ) (connector.Metrics, error) {
 	return &forward{Metrics: nextConsumer}, nil
@@ -65,8 +54,8 @@ func createMetricsToMetrics(
 // createLogsToLogs creates a log receiver based on provided config.
 func createLogsToLogs(
 	_ context.Context,
-	set connector.CreateSettings,
-	cfg component.Config,
+	_ connector.CreateSettings,
+	_ component.Config,
 	nextConsumer consumer.Logs,
 ) (connector.Logs, error) {
 	return &forward{Logs: nextConsumer}, nil

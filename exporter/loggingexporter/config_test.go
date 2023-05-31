@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package loggingexporter
 
@@ -93,6 +82,68 @@ func TestUnmarshalConfig(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.cfg, cfg)
 			}
+		})
+	}
+}
+
+func Test_UnmarshalMarshalled(t *testing.T) {
+	for name, tc := range map[string]struct {
+		inCfg          *Config
+		expectedConfig *Config
+		expectedErr    string
+	}{
+		"Base": {
+			inCfg:          &Config{},
+			expectedConfig: &Config{},
+		},
+		"VerbositySpecified": {
+			inCfg: &Config{
+				Verbosity: configtelemetry.LevelDetailed,
+			},
+			expectedConfig: &Config{
+				Verbosity: configtelemetry.LevelDetailed,
+			},
+		},
+		"LogLevelSpecified": {
+			inCfg: &Config{
+				LogLevel: zapcore.DebugLevel,
+			},
+			expectedConfig: &Config{
+				LogLevel:     zapcore.DebugLevel,
+				Verbosity:    configtelemetry.LevelDetailed,
+				warnLogLevel: true,
+			},
+		},
+		"SpecifiedLogLevelExpectedErr": {
+			inCfg: &Config{
+				// Cannot specify both log level and verbosity so an error is expected
+				LogLevel:  zapcore.DebugLevel,
+				Verbosity: configtelemetry.LevelNormal,
+			},
+			expectedErr: "'loglevel' and 'verbosity' are incompatible. Use only 'verbosity' instead",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+
+			conf := confmap.New()
+			err := conf.Marshal(tc.inCfg)
+			assert.NoError(t, err)
+
+			raw := conf.ToStringMap()
+
+			conf = confmap.NewFromStringMap(raw)
+
+			outCfg := &Config{}
+
+			err = component.UnmarshalConfig(conf, outCfg)
+
+			if tc.expectedErr == "" {
+				assert.NoError(t, err)
+				assert.Equal(t, outCfg, tc.expectedConfig)
+				return
+			}
+			assert.Error(t, err)
+			assert.EqualError(t, err, tc.expectedErr)
 		})
 	}
 }

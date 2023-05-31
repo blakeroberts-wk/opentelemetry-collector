@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package otlpreceiver
 
@@ -139,27 +128,42 @@ var traceOtlp = func() ptrace.Traces {
 
 func TestJsonHttp(t *testing.T) {
 	tests := []struct {
-		name     string
-		encoding string
-		err      error
+		name        string
+		encoding    string
+		contentType string
+		err         error
 	}{
 		{
-			name:     "JSONUncompressed",
-			encoding: "",
+			name:        "JSONUncompressed",
+			encoding:    "",
+			contentType: "application/json",
 		},
 		{
-			name:     "JSONGzipCompressed",
-			encoding: "gzip",
+			name:        "JSONUncompressedUTF8",
+			encoding:    "",
+			contentType: "application/json; charset=utf-8",
 		},
 		{
-			name:     "NotGRPCError",
-			encoding: "",
-			err:      errors.New("my error"),
+			name:        "JSONUncompressedUppercase",
+			encoding:    "",
+			contentType: "APPLICATION/JSON",
 		},
 		{
-			name:     "GRPCError",
-			encoding: "",
-			err:      status.New(codes.Internal, "").Err(),
+			name:        "JSONGzipCompressed",
+			encoding:    "gzip",
+			contentType: "application/json",
+		},
+		{
+			name:        "NotGRPCError",
+			encoding:    "",
+			contentType: "application/json",
+			err:         errors.New("my error"),
+		},
+		{
+			name:        "GRPCError",
+			encoding:    "",
+			contentType: "application/json",
+			err:         status.New(codes.Internal, "").Err(),
 		},
 	}
 	addr := testutil.GetAvailableLocalAddress(t)
@@ -179,7 +183,7 @@ func TestJsonHttp(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			url := fmt.Sprintf("http://%s/v1/traces", addr)
 			sink.Reset()
-			testHTTPJSONRequest(t, url, sink, test.encoding, test.err)
+			testHTTPJSONRequest(t, url, sink, test.encoding, test.contentType, test.err)
 		})
 	}
 }
@@ -239,6 +243,15 @@ func TestHandleInvalidRequests(t *testing.T) {
 			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
 		},
 		{
+			name:        "POST /v1/traces, invalid content type",
+			uri:         "/v1/traces",
+			method:      http.MethodPost,
+			contentType: "invalid",
+
+			expectedStatus:       http.StatusUnsupportedMediaType,
+			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
+		},
+		{
 			name:        "PATCH /v1/traces",
 			uri:         "/v1/traces",
 			method:      http.MethodPatch,
@@ -266,6 +279,15 @@ func TestHandleInvalidRequests(t *testing.T) {
 			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
 		},
 		{
+			name:        "POST /v1/metrics, no content type",
+			uri:         "/v1/metrics",
+			method:      http.MethodPost,
+			contentType: "invalid",
+
+			expectedStatus:       http.StatusUnsupportedMediaType,
+			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
+		},
+		{
 			name:        "PATCH /v1/metrics",
 			uri:         "/v1/metrics",
 			method:      http.MethodPatch,
@@ -288,6 +310,15 @@ func TestHandleInvalidRequests(t *testing.T) {
 			uri:         "/v1/logs",
 			method:      http.MethodPost,
 			contentType: "",
+
+			expectedStatus:       http.StatusUnsupportedMediaType,
+			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
+		},
+		{
+			name:        "POST /v1/logs, no content type",
+			uri:         "/v1/logs",
+			method:      http.MethodPost,
+			contentType: "invalid",
 
 			expectedStatus:       http.StatusUnsupportedMediaType,
 			expectedResponseBody: "415 unsupported media type, supported: [application/json, application/x-protobuf]",
@@ -336,7 +367,7 @@ func TestHandleInvalidRequests(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func testHTTPJSONRequest(t *testing.T, url string, sink *errOrSinkConsumer, encoding string, expectedErr error) {
+func testHTTPJSONRequest(t *testing.T, url string, sink *errOrSinkConsumer, encoding string, contentType string, expectedErr error) {
 	var buf *bytes.Buffer
 	var err error
 	switch encoding {
@@ -349,7 +380,7 @@ func testHTTPJSONRequest(t *testing.T, url string, sink *errOrSinkConsumer, enco
 	sink.SetConsumeError(expectedErr)
 	req, err := http.NewRequest(http.MethodPost, url, buf)
 	require.NoError(t, err, "Error creating trace POST request: %v", err)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Encoding", encoding)
 
 	client := &http.Client{}

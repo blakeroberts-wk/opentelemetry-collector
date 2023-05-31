@@ -1,32 +1,18 @@
 // Copyright The OpenTelemetry Authors
 // Copyright (c) 2019 The Jaeger Authors.
 // Copyright (c) 2017 Uber Technologies, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//       http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package internal // import "go.opentelemetry.io/collector/exporter/exporterhelper/internal"
 
 import (
 	"sync"
-
-	"go.uber.org/atomic"
+	"sync/atomic"
 )
 
 // boundedMemoryQueue implements a producer-consumer exchange similar to a ring buffer queue,
 // where the queue is bounded and if it fills up due to slow consumers, the new items written by
-// the producer force the earliest items to be dropped. The implementation is actually based on
-// channels, with a special Reaper goroutine that wakes up when the queue is full and consumers
-// the items from the top of the queue until its size drops back to maxSize
+// the producer are dropped.
 type boundedMemoryQueue struct {
 	stopWG   sync.WaitGroup
 	size     *atomic.Uint32
@@ -40,8 +26,8 @@ type boundedMemoryQueue struct {
 func NewBoundedMemoryQueue(capacity int) ProducerConsumerQueue {
 	return &boundedMemoryQueue{
 		items:    make(chan Request, capacity),
-		stopped:  atomic.NewBool(false),
-		size:     atomic.NewUint32(0),
+		stopped:  &atomic.Bool{},
+		size:     &atomic.Uint32{},
 		capacity: uint32(capacity),
 	}
 }
@@ -57,7 +43,7 @@ func (q *boundedMemoryQueue) StartConsumers(numWorkers int, callback func(item R
 			startWG.Done()
 			defer q.stopWG.Done()
 			for item := range q.items {
-				q.size.Sub(1)
+				q.size.Add(^uint32(0))
 				callback(item)
 			}
 		}()
@@ -84,7 +70,7 @@ func (q *boundedMemoryQueue) Produce(item Request) bool {
 		return true
 	default:
 		// should not happen, as overflows should have been captured earlier
-		q.size.Sub(1)
+		q.size.Add(^uint32(0))
 		return false
 	}
 }

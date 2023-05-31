@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package otelcol // import "go.opentelemetry.io/collector/otelcol"
 
@@ -41,7 +30,7 @@ func (s *configFlagValue) String() string {
 	return "[" + strings.Join(s.values, ", ") + "]"
 }
 
-func flags() *flag.FlagSet {
+func flags(reg *featuregate.Registry) *flag.FlagSet {
 	flagSet := new(flag.FlagSet)
 
 	cfgs := new(configFlagValue)
@@ -61,7 +50,7 @@ func flags() *flag.FlagSet {
 			return nil
 		})
 
-	flagSet.Var(featuregate.FlagValue{}, featureGatesFlag,
+	flagSet.Var(featuregate.NewFlag(reg), featureGatesFlag,
 		"Comma-delimited list of feature gate identifiers. Prefix with '-' to disable the feature. '+' or no prefix will enable the feature.")
 
 	return flagSet
@@ -70,8 +59,4 @@ func flags() *flag.FlagSet {
 func getConfigFlag(flagSet *flag.FlagSet) []string {
 	cfv := flagSet.Lookup(configFlag).Value.(*configFlagValue)
 	return append(cfv.values, cfv.sets...)
-}
-
-func getFeatureGatesFlag(flagSet *flag.FlagSet) featuregate.FlagValue {
-	return flagSet.Lookup(featureGatesFlag).Value.(featuregate.FlagValue)
 }
